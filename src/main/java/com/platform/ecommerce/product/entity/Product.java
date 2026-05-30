@@ -29,6 +29,9 @@ public class Product {
     @Column(nullable = true)
     private Integer stock;
 
+    // soft-reserved during PAYMENT_PENDING state
+    private Integer reservedQuantity = 0;
+
     @Column(nullable = false)
     private Boolean isActive;
 

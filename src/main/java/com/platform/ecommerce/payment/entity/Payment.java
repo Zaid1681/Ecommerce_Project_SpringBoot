@@ -4,6 +4,8 @@ import com.platform.ecommerce.common.enums.PaymentStatus;
 import jakarta.persistence.*;
 import lombok.Getter;
 import lombok.Setter;
+import org.hibernate.annotations.CreationTimestamp;
+import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.LocalDateTime;
 
@@ -19,12 +21,21 @@ public class Payment {
 
     private Long orderId;
 
+//    @Column(precision = 10, scale = 2)
     private Double amount;
 
     @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
     private PaymentStatus status;
 
+    @Column(unique = true)
+    private String stripePaymentIntentId;
+    @Column(unique = true)
+    private String lastWebhookEventId;
+    @CreationTimestamp
     private LocalDateTime createdDate;
+    @UpdateTimestamp
+    private LocalDateTime updatedAt;
 
     private String method;
     private String transactionId;

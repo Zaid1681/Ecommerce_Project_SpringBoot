@@ -154,6 +154,87 @@ mvn spring-boot:run
 | Cart    | `/cart/add`      | POST   |
 | Order   | `/orders/create` | POST   |
 
+
+### Steps to run code 
+- Clone it
+- Run ngrok (I used ngrok for making api public, calling webhook of stripe payment gateway)
+- run Redis (~ brew services redis ->  for mac) 
+- run Backend code
+- login and generate token (which will be used as authentication for hitting APIs)
+- add item to cart 
+- Frontend : click on checkout button (which acts as a checkout button of product cart and hit the /placeOrder APIs) and redirect to payment gateway
+- Frontend (Payment Gateway) : fill the credit cart number , cvv, and reqiured details and hit proceed 
+   - if -> payment succeeded hits the webhook and complete the order cycle and clear product from cart
+   - if -> if the payment fails then save the status as order failed and cart remains as it is 
+
+
+
+### Order State transition 
+User clicks Place Order
+
+        ↓
+
+Order Created
+
+Status = PLACED
+
+        ↓
+
+Inventory Check
+
+        ↓
+
+Status = CONFIRMED
+
+        ↓
+
+Payment Record Created
+
+        ↓
+
+Status = PAYMENT_PENDING
+
+        ↓
+     Customer Pays
+        ↓
+
+ ┌───────────────┐
+ │ Payment Success│
+ └───────────────┘
+
+        ↓
+
+Status = PAID
+
+Payment = SUCCESS
+
+
+
+OR
+
+
+
+ ┌───────────────┐
+ │ Payment Failed │
+ └───────────────┘
+
+        ↓
+
+Status = PAYMENT_FAILED
+
+        ↓
+
+Restore Inventory
+
+        ↓
+
+Status = CANCELLED
+
+Payment = FAILED
+
+
+
+
 ### Learning Goals
 Understand real-world backend architecture
 Learn how different modules interact (Product, Cart, Order, Payment)

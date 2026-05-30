@@ -10,11 +10,14 @@ import com.platform.ecommerce.product.repository.ProductRepository;
 import com.platform.ecommerce.product.service.ProductService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
 @Service
 public class ProductServiceImpl implements ProductService {
+    private static final Logger log = LoggerFactory.getLogger(ProductServiceImpl.class);
     @Autowired
     ProductRepository repo;
 
@@ -23,6 +26,7 @@ public class ProductServiceImpl implements ProductService {
 
     @Override
     public ProductResDto createProduct(ProductReqDto product) {
+        log.info("createProduct called for productName={}", product.getProductName());
 
         // 1. Category must exist
         Category cat = catRepo.findById(product.getCategoryId())
@@ -42,25 +46,31 @@ public class ProductServiceImpl implements ProductService {
                 .isActive(true)
                 .build();
         Product saved = repo.save(prod);
+        log.info("Product created with id={}", saved.getId());
         return mapToResponse(saved);
     }
 
     @Override
     public ProductResDto getProductById(Long id) {
+        log.info("getProductById called for id={}", id);
         Product saved = getProductOrThrow(id);
         return mapToResponse(saved);
     }
 
     @Override
     public List<ProductResDto> getAllProducts() {
-        return repo.findAll()
+        log.info("getAllProducts called");
+        List<ProductResDto> products = repo.findAll()
                 .stream()
                 .map(this::mapToResponse)
                 .toList();
+        log.info("getAllProducts returned {} products", products.size());
+        return products;
     }
 
     @Override
     public ProductResDto updateProduct(Long id, ProductReqDto product) {
+        log.info("updateProduct called for id={}", id);
 
         Category cat = catRepo.findById(product.getCategoryId())
                 .orElseThrow(() -> new ResourceNotFoundException("Category not found"));
@@ -71,19 +81,23 @@ public class ProductServiceImpl implements ProductService {
         prod.setPrice(product.getPrice());
         prod.setCategory(cat);
         Product saved = repo.save(prod);
+        log.info("Product updated id={}", id);
         return mapToResponse(saved);
 
     }
 
     @Override
     public String deleteProduct(Long id) {
+        log.info("deleteProduct called for id={}", id);
         Product prod = getProductOrThrow(id);
         repo.deleteById(id);
+        log.info("Product deleted id={}", id);
         return "Product Deleted Success";
     }
 
     @Override
     public ProductResDto deactivateProduct(Long id) {
+        log.info("deactivateProduct called for id={}", id);
         Product prod = getProductOrThrow(id);
         prod.setIsActive(false);
         repo.save(prod);

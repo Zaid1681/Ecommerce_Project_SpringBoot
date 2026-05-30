@@ -20,9 +20,11 @@ public class Order {
     private Long id;
 
     private Long userId;
+//    @Column(precision = 10, scale = 2)
     private Double totalAmount;
 
     @Enumerated(EnumType.STRING)
+    @Column(nullable = false)
     private OrderStatus status;
 
     private LocalDateTime createdAt;

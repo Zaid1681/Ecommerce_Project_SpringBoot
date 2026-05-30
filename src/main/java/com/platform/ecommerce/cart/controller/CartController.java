@@ -16,12 +16,11 @@ public class CartController {
     @Autowired
     CartService cartService;
 
-    @PostMapping("/{userId}")
+    @PostMapping("")
     public CartResponseDto addToCart(
-            @PathVariable Long userId,
             @RequestBody AddToCartRequestDto dto) {
 
-        return cartService.addToCart(userId, dto);
+        return cartService.addToCart(dto);
     }
     @GetMapping("/{userId}")
     public CartResponseDto getCart(@PathVariable Long userId) {
