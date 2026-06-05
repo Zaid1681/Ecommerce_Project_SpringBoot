@@ -6,14 +6,14 @@ import com.platform.ecommerce.payment.service.PaymentService;
 import com.stripe.exception.EventDataObjectDeserializationException;
 import com.stripe.exception.StripeException;
 import jakarta.servlet.http.HttpServletRequest;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 @RestController
 @RequestMapping("/api/payment")
@@ -65,34 +65,12 @@ public class PaymentController {
         }
         return ResponseEntity.ok("success");
     }
+    
 
-
-
-    @PostMapping("/confirm")
-    public ResponseEntity<?> confirmPayment(@RequestParam Long orderId) {
-        log.info("HTTP POST /api/payment/confirm orderId={}", orderId);
-        paymentService.markPaymentSuccess(orderId);
-        return ResponseEntity.ok("Payment confirmed");
-    }
-
-    @PostMapping("/{paymentId}/success")
-    public ResponseEntity<?> success(@PathVariable Long paymentId) {
-        log.info("HTTP POST /api/payment/{}/success", paymentId);
-        paymentService.markSuccess(paymentId);
-        return ResponseEntity.ok("Payment successful");
-    }
-
-    @PostMapping("/{paymentId}/fail")
-    public ResponseEntity<?> fail(@PathVariable Long paymentId) {
-        log.info("HTTP POST /api/payment/{}/fail", paymentId);
-        paymentService.markFailed(paymentId);
-        return ResponseEntity.ok("Payment failed");
-    }
     @GetMapping("/{paymentId}")
     public PaymentResDto getPaymentById(@PathVariable Long paymentId) {
         log.info("HTTP GET /api/payment/{} - getPaymentById", paymentId);
         return paymentService.getPaymentDetailsBId(paymentId);
     }
-
 
 }

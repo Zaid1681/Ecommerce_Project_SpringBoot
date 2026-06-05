@@ -5,6 +5,8 @@ import com.platform.ecommerce.cart.repository.CartRepository;
 import com.platform.ecommerce.common.enums.OrderStatus;
 import com.platform.ecommerce.exceptons.ResourceNotFoundException;
 import com.platform.ecommerce.inventory.service.InventoryService;
+import com.platform.ecommerce.kafka.events.OrderConfirmedEvent;
+import com.platform.ecommerce.kafka.producer.KafkaEventProducer;
 import com.platform.ecommerce.order.dto.OrderResponseDto;
 import com.platform.ecommerce.order.entity.Order;
 import com.platform.ecommerce.order.entity.OrderItem;
@@ -14,10 +16,8 @@ import com.platform.ecommerce.order.service.OrderService;
 import com.platform.ecommerce.payment.repository.PaymentRepository;
 import com.platform.ecommerce.session.UserSession;
 import com.platform.ecommerce.user.entity.Users;
-import com.platform.ecommerce.user.repository.UserRepository;
 import com.platform.ecommerce.order.statemachine.OrderStateMachine;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 
 import org.slf4j.Logger;
@@ -46,9 +46,9 @@ public class OrderServiceImpl implements OrderService {
     @Autowired
     private OrderStateMachine orderStateMachine;
     @Autowired
-    private UserRepository userRepo;
-    @Autowired
     private UserSession userSession;
+    @Autowired
+    private KafkaEventProducer kafkaEventProducer;
 //    @Override
 //    public CheckoutResponseDto placeOrder(Long userId) {
 //        Cart cart = cartRepo.findByUserId(userId)
@@ -85,11 +85,6 @@ public class OrderServiceImpl implements OrderService {
 //    }
 @Override
 public OrderResponseDto placeOrder() {
-    String userName = SecurityContextHolder
-            .getContext()
-            .getAuthentication()
-            .getName();
-
     Users user = userSession.getCurrentUser();
     Long userId = user.getId();
     log.info("Place order requested by userId={}", userId);
@@ -130,6 +125,16 @@ public OrderResponseDto placeOrder() {
     Order saved = orderRepo.save(order);
     log.info("Order created: orderId={} itemCount={}", saved.getId(), saved.getItems().size());
     log.debug("Order created details: userId={} total={}", userId, saved.getTotalAmount());
+
+    OrderConfirmedEvent event = new OrderConfirmedEvent(
+            saved.getId(),
+            userId,
+            user.getEmail(),
+            saved.getStatus().name(),
+            saved.getTotalAmount(),
+            saved.getCreatedAt()
+    );
+    kafkaEventProducer.send(com.platform.ecommerce.kafka.KafkaTopics.ORDER_CONFIRMED, event);
 
     return mapper.toDto(saved);
 //    Payment payment = new Payment();

@@ -9,12 +9,17 @@ import com.platform.ecommerce.order.entity.Order;
 import com.platform.ecommerce.order.entity.OrderItem;
 import com.platform.ecommerce.order.repository.OrderRepository;
 import com.platform.ecommerce.order.statemachine.OrderStateMachine;
+import com.platform.ecommerce.kafka.events.PaymentFailedEvent;
+import com.platform.ecommerce.kafka.events.PaymentInitiatedEvent;
+import com.platform.ecommerce.kafka.events.PaymentSucceededEvent;
+import com.platform.ecommerce.kafka.producer.KafkaEventProducer;
 import com.platform.ecommerce.payment.dto.InitiatePaymentResponse;
 import com.platform.ecommerce.payment.dto.PaymentResDto;
 import com.platform.ecommerce.payment.entity.Payment;
 import com.platform.ecommerce.payment.mapper.PaymentMapper;
 import com.platform.ecommerce.payment.repository.PaymentRepository;
 import com.platform.ecommerce.payment.service.PaymentService;
+import com.platform.ecommerce.shipping.service.ShippingService;
 import com.stripe.exception.EventDataObjectDeserializationException;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.exception.StripeException;
@@ -39,6 +44,9 @@ public class PaymentServiceImpl implements PaymentService {
     @Autowired private InventoryService inventoryService;
     @Autowired private PaymentMapper paymentMapper;
     @Autowired private OrderStateMachine stateMachine;
+    @Autowired private ShippingService shippingService;
+    @Autowired private KafkaEventProducer kafkaEventProducer;
+    @Autowired private com.platform.ecommerce.user.repository.UserRepository userRepository;
     @Value("${stripe.publishable.key}")
     private String stripePublishableKey;
 
@@ -92,6 +100,22 @@ public class PaymentServiceImpl implements PaymentService {
         orderRepository.save(order);
         log.info("Order moved to PAYMENT_PENDING: orderId={}", orderId);
 
+        String email = userRepository.findById(order.getUserId())
+                .map(user -> user.getEmail())
+                .orElse("no-reply@ecommerce.com");
+
+        PaymentInitiatedEvent event = new PaymentInitiatedEvent(
+                orderId,
+                payment.getId(),
+                order.getUserId(),
+                email,
+                order.getStatus().name(),
+                order.getTotalAmount(),
+                intent.getId(),
+                order.getCreatedAt()
+        );
+        kafkaEventProducer.send(com.platform.ecommerce.kafka.KafkaTopics.PAYMENT_INITIATED, event);
+
         InitiatePaymentResponse response = new InitiatePaymentResponse();
         response.setPaymentId(payment.getId());
         response.setOrderId(orderId);
@@ -101,36 +125,11 @@ public class PaymentServiceImpl implements PaymentService {
         response.setReturnUrl(frontendUrl + "/payment/return?orderId=" + orderId);
         return response;
     }
-
-    @Override
-    public void markPaymentSuccess(Long orderId) {
-        log.info("Confirm payment endpoint called for orderId={}", orderId);
-        Payment payment = paymentRepository.findByOrderId(orderId)
-                        .orElseThrow(()-> new ResourceNotFoundException("Payment not found"));
-
-        payment.setStatus(PaymentStatus.SUCCESS);
-        paymentRepository.save(payment);
-        log.info("Payment marked SUCCESS: paymentId={} orderId={}", payment.getId(), orderId);
-
-        Order order = orderRepository.findById(orderId)
-            .orElseThrow(()-> new ResourceNotFoundException("Order not found"));
-
-        // PAYMENT_PENDING -> PAID
-        stateMachine.transition(order, OrderStatus.PAID);
-        orderRepository.save(order);
-        log.info("Order state transitioned to PAID: orderId={}", orderId);
-
-    }
-
+    
 
     // ───────────────────────────────────────────────────────
-    // Step 2: /payments/status?paymentIntentId=pi_xxx
-    // Called from the return_url page to show current state
-    // Retrieves live status from Stripe (not just DB)
-    // ───────────────────────────────────────────────────────
-    // ==========================================
     // MAIN WEBHOOK HANDLER
-    // ==========================================
+    // ───────────────────────────────────────────────────────
 
     public void processWebhook(String rawPayload, String stripeSignatureHeader) throws EventDataObjectDeserializationException {
 
@@ -238,7 +237,29 @@ public class PaymentServiceImpl implements PaymentService {
         paymentRepository.save(payment);
         orderRepository.save(order);
 
+        PaymentSucceededEvent event = new PaymentSucceededEvent(
+                order.getId(),
+                payment.getId(),
+                order.getUserId(),
+                userRepository.findById(order.getUserId()).map(u -> u.getEmail()).orElse("no-reply@ecommerce.com"),
+                order.getStatus().name(),
+                order.getTotalAmount(),
+                stripeObject.getId(),
+                order.getCreatedAt()
+        );
+        kafkaEventProducer.send(com.platform.ecommerce.kafka.KafkaTopics.PAYMENT_SUCCEEDED, event);
+
         log.info("Payment succeeded. orderId={} paymentIntentId={}", order.getId(), stripeObject.getId());
+
+        // Start fulfillment process: PAID → PROCESSING
+        try {
+            shippingService.startProcessing(order.getId());
+            log.info("Fulfillment started for orderId={}", order.getId());
+        } catch (Exception e) {
+            log.error("Failed to start fulfillment for orderId={}: {}", order.getId(), e.getMessage());
+            // Log the error but don't fail the webhook response
+            // Fulfillment can be retried manually via shipping API
+        }
     }
 
     // ───────────────────────────────────────────────────────
@@ -267,6 +288,20 @@ public class PaymentServiceImpl implements PaymentService {
 
         paymentRepository.save(payment);
         orderRepository.save(order);
+
+        PaymentFailedEvent event = new PaymentFailedEvent(
+                order.getId(),
+                payment.getId(),
+                order.getUserId(),
+                userRepository.findById(order.getUserId()).map(u -> u.getEmail()).orElse("no-reply@ecommerce.com"),
+                order.getStatus().name(),
+                order.getTotalAmount(),
+                stripeObject.getId(),
+                stripeObject.getLastPaymentError() != null ? stripeObject.getLastPaymentError().getMessage() : "unknown",
+                order.getCreatedAt()
+        );
+        kafkaEventProducer.send(com.platform.ecommerce.kafka.KafkaTopics.PAYMENT_FAILED, event);
+
         log.warn("Payment failed. orderId={} reason={}", order.getId(),
                 stripeObject.getLastPaymentError() != null ? stripeObject.getLastPaymentError().getMessage() : "unknown");
 
@@ -278,63 +313,6 @@ public class PaymentServiceImpl implements PaymentService {
     }
 
     @Override
-    public void markSuccess(Long paymentId) {
-        Payment payment = paymentRepository.findById(paymentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Payment Details not found"));
-
-        // ★ Idempotency — webhook can fire multiple times ★
-        if (payment.getStatus() == PaymentStatus.SUCCESS) {
-            return;
-        }
-
-        Order order = orderRepository.findById(payment.getOrderId())
-                .orElseThrow(() -> new ResourceNotFoundException("Order not found"));
-
-        // checking payment status
-        if (!payment.getStatus().equals(PaymentStatus.PENDING)) {
-            throw new RuntimeException("Failed to create payment");
-        }
-
-        // checking order status — payment should be in PAYMENT_PENDING
-        if (!order.getStatus().equals(OrderStatus.PAYMENT_PENDING)) {
-            throw new RuntimeException("Failed to create payment");
-        }
-
-        // PAYMENT_PENDING -> PAID
-        stateMachine.transition(order, OrderStatus.PAID);
-        payment.setStatus(PaymentStatus.SUCCESS);
-
-        cartService.clearCart(order.getUserId());
-
-        // saving changes
-        paymentRepository.save(payment);
-        orderRepository.save(order);
-    }
-
-    @Override
-    public void markFailed(Long paymentId) {
-        Payment payment = paymentRepository.findById(paymentId)
-                .orElseThrow(() -> new ResourceNotFoundException("Payment Details not found"));
-        payment.setStatus(PaymentStatus.FAILED);
-
-        Order order = orderRepository.findById(payment.getOrderId())
-                .orElseThrow(() -> new RuntimeException("Order not found"));
-        if (!payment.getStatus().equals(PaymentStatus.PENDING)) {
-            throw new RuntimeException("Payment process failed");
-        }
-
-        // move order to CANCELLED and restore stock
-        stateMachine.transition(order, OrderStatus.CANCELLED);
-
-        for (OrderItem item : order.getItems()) {
-            inventoryService.restoreStock(item.getProductId(), item.getQuantity());
-        }
-        paymentRepository.save(payment);
-        orderRepository.save(order);
-
-    }
-
-    @Override
     public PaymentResDto getPaymentDetailsBId(Long id) {
         Payment payment = paymentRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Payment Details not found"));
@@ -342,6 +320,6 @@ public class PaymentServiceImpl implements PaymentService {
         return paymentMapper.toDto(payment);
     }
 
-    }
+}
 
 

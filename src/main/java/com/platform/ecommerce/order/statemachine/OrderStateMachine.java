@@ -48,7 +48,16 @@ public class OrderStateMachine {
         transitions.put(
                 OrderStatus.PAID,
                 Set.of(
-                        OrderStatus.SHIPPED
+                        OrderStatus.PROCESSING,
+                        OrderStatus.CANCELLED
+                )
+        );
+
+        transitions.put(
+                OrderStatus.PROCESSING,
+                Set.of(
+                        OrderStatus.SHIPPED,
+                        OrderStatus.CANCELLED
                 )
         );
 
@@ -56,6 +65,13 @@ public class OrderStateMachine {
                 OrderStatus.SHIPPED,
                 Set.of(
                         OrderStatus.DELIVERED
+                )
+        );
+
+        transitions.put(
+                OrderStatus.PAYMENT_FAILED,
+                Set.of(
+                        OrderStatus.CANCELLED
                 )
         );
     }
