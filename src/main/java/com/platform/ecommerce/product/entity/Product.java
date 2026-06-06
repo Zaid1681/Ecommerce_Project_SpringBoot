@@ -32,6 +32,9 @@ public class Product {
     // soft-reserved during PAYMENT_PENDING state
     private Integer reservedQuantity = 0;
 
+    @Version
+    private Long version;
+
     @Column(nullable = false)
     private Boolean isActive;
 
