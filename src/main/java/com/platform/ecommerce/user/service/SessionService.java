@@ -12,7 +12,7 @@ public class SessionService {
     @Autowired
     private RedisTemplate<String, Object> redisTemplate;
 
-    private static final long SESSION_TTL = 30; // minutes
+    private static final long SESSION_TTL = 10; // minutes
 
     public void storeSession(String username, String token) {
         String key = buildKey(username);
