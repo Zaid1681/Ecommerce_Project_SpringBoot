@@ -3,7 +3,6 @@ package com.platform.ecommerce.order.controller;
 import com.platform.ecommerce.order.dto.OrderResponseDto;
 import com.platform.ecommerce.order.service.OrderService;
 import lombok.RequiredArgsConstructor;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
@@ -16,7 +15,7 @@ import org.slf4j.LoggerFactory;
 @RequestMapping("/api/order")
 @RequiredArgsConstructor
 public class OrderController {
-    @Autowired private OrderService orderService;
+    private final OrderService orderService;
 
     private static final Logger log = LoggerFactory.getLogger(OrderController.class);
 

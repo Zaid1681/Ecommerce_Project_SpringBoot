@@ -4,26 +4,18 @@ import com.platform.ecommerce.cart.entity.Cart;
 import com.platform.ecommerce.cart.repository.CartRepository;
 import com.platform.ecommerce.common.enums.OrderStatus;
 import com.platform.ecommerce.exceptons.ResourceNotFoundException;
-import com.platform.ecommerce.inventory.service.InventoryService;
-import com.platform.ecommerce.kafka.events.OrderConfirmedEvent;
-import com.platform.ecommerce.kafka.producer.KafkaEventProducer;
 import com.platform.ecommerce.order.dto.OrderResponseDto;
 import com.platform.ecommerce.order.entity.Order;
-import com.platform.ecommerce.order.entity.OrderItem;
 import com.platform.ecommerce.order.mapper.OrderMapper;
 import com.platform.ecommerce.order.repository.OrderRepository;
 import com.platform.ecommerce.order.service.OrderService;
-import com.platform.ecommerce.payment.repository.PaymentRepository;
 import com.platform.ecommerce.session.UserSession;
 import com.platform.ecommerce.user.entity.Users;
-import com.platform.ecommerce.order.statemachine.OrderStateMachine;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.time.LocalDateTime;
 import java.util.List;
 
 @Service
@@ -31,24 +23,34 @@ public class OrderServiceImpl implements OrderService {
 
     private static final Logger log = LoggerFactory.getLogger(OrderServiceImpl.class);
 
-    @Autowired
-    CartRepository cartRepo;
+    private final CartRepository cartRepo;
+    private final OrderRepository orderRepo;
+    private final OrderMapper mapper;
+    private final OrderCreationService orderCreationService;
+    private final InventoryReservationService inventoryReservationService;
+    private final OrderStateTransitionService orderStateTransitionService;
+    private final OrderEventPublisher orderEventPublisher;
+    private final UserSession userSession;
 
-    @Autowired
-    OrderRepository orderRepo;
-
-    @Autowired
-    OrderMapper mapper;
-    @Autowired
-    InventoryService inventoryService;
-    @Autowired
-    PaymentRepository paymentRepository;
-    @Autowired
-    private OrderStateMachine orderStateMachine;
-    @Autowired
-    private UserSession userSession;
-    @Autowired
-    private KafkaEventProducer kafkaEventProducer;
+    public OrderServiceImpl(
+            CartRepository cartRepo,
+            OrderRepository orderRepo,
+            OrderMapper mapper,
+            OrderCreationService orderCreationService,
+            InventoryReservationService inventoryReservationService,
+            OrderStateTransitionService orderStateTransitionService,
+            OrderEventPublisher orderEventPublisher,
+            UserSession userSession
+    ) {
+        this.cartRepo = cartRepo;
+        this.orderRepo = orderRepo;
+        this.mapper = mapper;
+        this.orderCreationService = orderCreationService;
+        this.inventoryReservationService = inventoryReservationService;
+        this.orderStateTransitionService = orderStateTransitionService;
+        this.orderEventPublisher = orderEventPublisher;
+        this.userSession = userSession;
+    }
 //    @Override
 //    public CheckoutResponseDto placeOrder(Long userId) {
 //        Cart cart = cartRepo.findByUserId(userId)
@@ -83,60 +85,33 @@ public class OrderServiceImpl implements OrderService {
 //        cartRepo.save(cart);
 //        return mapper.toDto(saved);
 //    }
-@Override
-public OrderResponseDto placeOrder() {
-    Users user = userSession.getCurrentUser();
-    Long userId = user.getId();
-    log.info("Place order requested by userId={}", userId);
-    Cart cart = cartRepo.findByUserId(userId)
-            .orElseThrow(() -> new ResourceNotFoundException("Cart not found"));
+    @Override
+    public OrderResponseDto placeOrder() {
+        Users user = userSession.getCurrentUser();
+        Long userId = user.getId();
+        log.info("Place order requested by userId={}", userId);
 
-    if (cart.getItems().isEmpty()) {
-        throw new RuntimeException("Cart is empty");
-    }
-    // 1 Creat Order
-    Order order  = new Order();
-    order.setUserId(userId);
-    order.setStatus(OrderStatus.PLACED);
-    order.setCreatedAt(LocalDateTime.now());
-    List<OrderItem> items = cart.getItems().stream()
-            .map((ci) ->{
-                OrderItem oi = new OrderItem();
-                oi.setProductId(ci.getProductId());
-                oi.setQuantity(ci.getQuantity());
-                oi.setPrice(ci.getPrice());
-                oi.setOrder(order);
-                return oi;
-            }).toList();
-    order.setItems(items);
+        Cart cart = cartRepo.findByUserId(userId)
+                .orElseThrow(() -> new ResourceNotFoundException("Cart not found"));
 
-    Double totalPrice = items.stream()
-            .mapToDouble(i -> i.getPrice() * i.getQuantity()).sum();
-    order.setTotalAmount(totalPrice);
+        if (cart.getItems().isEmpty()) {
+            throw new RuntimeException("Cart is empty");
+        }
 
-    // 2️⃣ Reserve Stock
-    log.info("Reserving stock for {} items for userId={}", items.size(), userId);
-    for (OrderItem item : items) {
-        inventoryService.reserveStock(item.getProductId(), item.getQuantity());
-    }
-    // after reserving stock, mark order as CONFIRMED and ready for payment
-    log.info("Reserving complete for userId={} moving order to CONFIRMED", userId);
-    orderStateMachine.transition(order, OrderStatus.CONFIRMED);
-    Order saved = orderRepo.save(order);
-    log.info("Order created: orderId={} itemCount={}", saved.getId(), saved.getItems().size());
-    log.debug("Order created details: userId={} total={}", userId, saved.getTotalAmount());
+        Order order = orderCreationService.buildOrder(userId, cart);
 
-    OrderConfirmedEvent event = new OrderConfirmedEvent(
-            saved.getId(),
-            userId,
-            user.getEmail(),
-            saved.getStatus().name(),
-            saved.getTotalAmount(),
-            saved.getCreatedAt()
-    );
-    kafkaEventProducer.send(com.platform.ecommerce.kafka.KafkaTopics.ORDER_CONFIRMED, event);
+        log.info("Reserving stock for {} items for userId={}", order.getItems().size(), userId);
+        inventoryReservationService.reserveInventory(order);
 
-    return mapper.toDto(saved);
+        log.info("Reserving complete for userId={} moving order to CONFIRMED", userId);
+        orderStateTransitionService.confirmOrder(order);
+
+        Order saved = orderRepo.save(order);
+        log.info("Order created: orderId={} itemCount={}", saved.getId(), saved.getItems().size());
+        log.debug("Order created details: userId={} total={}", userId, saved.getTotalAmount());
+
+        orderEventPublisher.publishOrderConfirmed(saved, user);
+        return mapper.toDto(saved);
 //    Payment payment = new Payment();
 //    payment.setOrderId(saved.getId());
 //    payment.setAmount(totalPrice);
